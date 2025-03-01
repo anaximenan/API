@@ -1,0 +1,7 @@
+C:\Users\Marma\Documents\MisProyectos\PdfApi\obj\Debug\net9.0\PdfApi.csproj.AssemblyReference.cache
+C:\Users\Marma\Documents\MisProyectos\PdfApi\obj\Debug\net9.0\PdfApi.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\Marma\Documents\MisProyectos\PdfApi\obj\Debug\net9.0\PdfApi.AssemblyInfoInputs.cache
+C:\Users\Marma\Documents\MisProyectos\PdfApi\obj\Debug\net9.0\PdfApi.AssemblyInfo.cs
+C:\Users\Marma\Documents\MisProyectos\PdfApi\obj\Debug\net9.0\PdfApi.csproj.CoreCompileInputs.cache
+C:\Users\Marma\Documents\MisProyectos\PdfApi\obj\Debug\net9.0\PdfApi.MvcApplicationPartsAssemblyInfo.cs
+C:\Users\Marma\Documents\MisProyectos\PdfApi\obj\Debug\net9.0\PdfApi.MvcApplicationPartsAssemblyInfo.cache
