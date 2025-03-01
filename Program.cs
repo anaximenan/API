@@ -9,7 +9,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 
-// Configuración de Swagger (versión corregida)
+// Configuración de Swagger
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo 
@@ -23,8 +23,8 @@ builder.Services.AddSwaggerGen(c =>
             Email = "soporte@pdfapi.com"
         }
     });
-    
-    c.OperationFilter<FileUploadOperationFilter>(); // Solo un filtro
+
+    c.OperationFilter<FileUploadOperationFilter>();
 });
 
 // Configuración CORS
@@ -40,23 +40,23 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Configuración del middleware
-if (app.Environment.IsDevelopment())
+// 🚀 Mostrar Swagger SIEMPRE (Render no tiene modo "Development")
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseDeveloperExceptionPage();
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "PDF API v1");
-        c.RoutePrefix = "swagger"; // Ruta de acceso
-    });
-}
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "PDF API v1");
+    c.RoutePrefix = "swagger"; // Ruta de acceso
+});
 
-app.UseHttpsRedirection();
+// ❌ 🔴 NO redirigir a HTTPS en Render
+// app.UseHttpsRedirection();
+
 app.UseRouting();
 app.UseCors("AllowAll");
-app.UseAuthorization(); // Requiere el servicio de autorización
+app.UseAuthorization();
 
 app.MapControllers();
 
-app.Run();
+// 📌 🔥 Forzar puerto correcto en Render
+var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
+app.Run($"http://0.0.0.0:{port}");
