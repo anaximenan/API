@@ -40,7 +40,7 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// 🚀 Mostrar Swagger SIEMPRE (Render no tiene modo "Development")
+// 🚀 Mostrar Swagger SIEMPRE en Render
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
@@ -57,6 +57,5 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-// 📌 🔥 Forzar puerto correcto en Render
-var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
-app.Run($"http://0.0.0.0:{port}");
+// ✅ Render asignará automáticamente el puerto correcto
+app.Run();
