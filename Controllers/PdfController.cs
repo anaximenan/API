@@ -83,27 +83,75 @@ namespace PdfApi.Controllers
             MovimientoBBVA? currentMovimiento = null;
             bool esReferencia = false;
 
-            foreach (string lineaRaw in lineas)
+            for (int i = 0; i < lineas.Length; i++)
             {
-                string linea = lineaRaw.Trim();
-                if (ignoreLines.Any(ign => linea.Contains(ign)))
-                    continue;
+                string linea = lineas[i].Trim();
+                bool isIgnoredLine = ignoreLines.Any(ign => linea.Contains(ign)) || string.IsNullOrWhiteSpace(linea);
+                if (isIgnoredLine) continue;
 
                 var match = Regex.Match(linea, @"^(?<dia1>\d{2})/(?<mes1>[A-Z]{3})\s+(?<dia2>\d{2})/(?<mes2>[A-Z]{3})\s*(?<resto>.*)$");
                 if (match.Success)
                 {
                     esReferencia = false;
+                    string resto = match.Groups["resto"].Value.Trim();
+
+                    // Extraer montos
+                    var montosMatch = Regex.Matches(resto, @"\d{1,3}(,\d{3})*(\.\d{2})");
+                    string cargosAbonos = "";
+                    string operacion = "";
+                    string liquidacion = "";
+
+                    if (montosMatch.Count > 0)
+                    {
+                        cargosAbonos = montosMatch[0].Value;
+                        if (montosMatch.Count >= 2) operacion = montosMatch[1].Value;
+                        if (montosMatch.Count >= 3) liquidacion = montosMatch[2].Value;
+
+                        foreach (Match monto in montosMatch.Cast<Match>())
+                        {
+                            resto = resto.Replace(monto.Value, "").Trim();
+                        }
+                    }
+
+                    // Procesar referencia
+                    var refMatch = Regex.Match(resto, @"^(?<descripcion>.*?)(Ref\.\s*)(?<referencia>.*)$");
+                    string codDescripcion = resto;
+                    string referencia = "";
+
+                    if (refMatch.Success)
+                    {
+                        codDescripcion = refMatch.Groups["descripcion"].Value.Trim();
+                        referencia = "Ref. " + refMatch.Groups["referencia"].Value.Trim();
+                    }
+
+                    // Crear movimiento
                     currentMovimiento = new MovimientoBBVA
                     {
                         OPER = $"{match.Groups["dia1"].Value}-{match.Groups["mes1"].Value}",
                         LIQ = $"{match.Groups["dia2"].Value}-{match.Groups["mes2"].Value}",
                         ANIO = selectedYear,
-                        COD_DESCRIPCION = match.Groups["resto"].Value.Trim(),
-                        REFERENCIA = string.Empty,
-                        CARGOS_ABONOS = string.Empty,
-                        OPERACION = string.Empty,
-                        LIQUIDACION = string.Empty
+                        COD_DESCRIPCION = codDescripcion,
+                        REFERENCIA = referencia,
+                        CARGOS_ABONOS = cargosAbonos,
+                        OPERACION = operacion,
+                        LIQUIDACION = liquidacion
                     };
+
+                    // Procesar líneas siguientes para descripción
+                    while (i + 1 < lineas.Length)
+                    {
+                        string nextLine = lineas[i + 1].Trim();
+                        if (ignoreLines.Any(ign => nextLine.Contains(ign))) break;
+
+                        bool tieneMontos = Regex.IsMatch(nextLine, @"\d{1,3}(,\d{3})*(\.\d{2})");
+                        bool esNuevoMovimiento = Regex.IsMatch(nextLine, @"^\d{2}/[A-Z]{3}\s+\d{2}/[A-Z]{3}");
+                        
+                        if (tieneMontos || esNuevoMovimiento) break;
+
+                        currentMovimiento.COD_DESCRIPCION += " " + nextLine;
+                        i++;
+                    }
+
                     movimientos.Add(currentMovimiento);
                 }
                 else if (currentMovimiento != null)
@@ -123,8 +171,10 @@ namespace PdfApi.Controllers
                     }
                 }
             }
+
             return movimientos;
         }
+    
 
         // -----------------------------------------------------------------
         // Endpoint para procesar PDFs tipo BanBajío (Actualizado iText7)
@@ -475,26 +525,10 @@ namespace PdfApi.Controllers
             if (file.Length == 0)
                 return BadRequest("No se proporcionó un archivo PDF válido.");
 
-            List<MovimientoBanorte> movimientos = new();
-
             try
             {
-                using (var memoryStream = new MemoryStream())
-                {
-                    file.CopyTo(memoryStream);
-                    memoryStream.Position = 0;
-
-                    using (var reader = new PdfReader(memoryStream))
-                    using (var pdfDoc = new PdfDocument(reader))
-                    {
-                        for (int page = 1; page <= pdfDoc.GetNumberOfPages(); page++)
-                        {
-                            var strategy = new SimpleTextExtractionStrategy();
-                            string pageText = PdfTextExtractor.GetTextFromPage(pdfDoc.GetPage(page), strategy);
-                            movimientos.AddRange(ExtraerMovimientosBanorte(pageText, anio));
-                        }
-                    }
-                }
+                var text = ExtraerTextoPdf(file);
+                var movimientos = ExtraerMovimientosBanorte(text, anio);
                 return Ok(movimientos);
             }
             catch (Exception ex)
@@ -503,143 +537,155 @@ namespace PdfApi.Controllers
             }
         }
 
-        private List<MovimientoBanorte> ExtraerMovimientosBanorte(string pagina, int selectedYear)
+        private string ExtraerTextoPdf(IFormFile file)
         {
-            List<MovimientoBanorte> movimientos = new();
-            
-            // Variables para acumular datos
-            string fechaActual = string.Empty;
-            string descripcion = string.Empty;
-            string montoDeposito = string.Empty;
-            string montoRetiro = string.Empty;
-            string saldo = string.Empty;
-            string saldoAnterior = string.Empty;
-            bool isReadingDescription = false;
+            using var stream = file.OpenReadStream();
+            using var reader = new PdfReader(stream);
+            using var pdfDoc = new PdfDocument(reader);
 
-            // Líneas a ignorar (encabezados, pies, etc.)
-            string[] ignoreLines = {
+            var fullText = new StringBuilder();
+            for (int i = 1; i <= pdfDoc.GetNumberOfPages(); i++)
+            {
+                var strategy = new SimpleTextExtractionStrategy();
+                string pageText = PdfTextExtractor.GetTextFromPage(pdfDoc.GetPage(i), strategy);
+                fullText.Append(ProcesarTexto(pageText));
+            }
+            return fullText.ToString();
+        }
+
+        private string ProcesarTexto(string text)
+        {
+            var processedText = new StringBuilder();
+            var lines = text.Split('\n');
+            foreach (var line in lines)
+            {
+                string cleanedLine = Regex.Replace(line.Trim(), @"\s{2,}", " ");
+                if (Regex.IsMatch(cleanedLine, @"^\d{2}-[A-Z]{3}-\d{2}"))
+                    processedText.AppendLine("\n" + cleanedLine);
+                else
+                    processedText.AppendLine(cleanedLine);
+            }
+            return processedText.ToString();
+        }
+
+        private List<MovimientoBanorte> ExtraerMovimientosBanorte(string text, int anio)
+        {
+            var movimientos = new List<MovimientoBanorte>();
+            var ignorePatterns = new[]
+            {
                 "Línea Directa para su empresa:",
-                "Ciudad de México:",
-                "Monterrey:",
-                "Guadalajara:",
-                "Resto del país:",
                 "Visita nuestra página:",
                 "Banco Mercantil del Norte S.A.",
                 "Institución de Banca Múltiple Grupo Financiero Banorte",
-                "Av. Revolución No. 3000, Colonia La Primavera C.P.64830, Municipio Monterrey",
-                "Nuevo Leon. RFC BMN93020992",
-                "ESTADO DE CUENTA / ENLACE NEGOCIOS PFAE",
-                "2/8"
+                "ESTADO DE CUENTA / ENLACE NEGOCIOS PFAE"
             };
 
-            var lineas = pagina.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-
-            foreach (var linea in lineas)
+            string[] bloques = text.Split(new[] { "DETALLE DE MOVIMIENTOS (PESOS)" }, StringSplitOptions.None);
+            
+            foreach (var bloque in bloques.Skip(1))
             {
-                if (ignoreLines.Any(ignore => linea.Contains(ignore)))
-                    continue;
+                int indexFin = bloque.IndexOf("OTROS");
+                string contenido = indexFin != -1 ? bloque.Substring(0, indexFin) : bloque;
 
-                // Buscar la línea que inicia con la fecha (formato: "dd-MMM-yy")
-                var match = Regex.Match(linea, @"^(?<fecha>\d{2}-[A-Z]{3}-\d{2})(?<descripcion>.*)$");
-                if (match.Success)
-                {
-                    if (!string.IsNullOrEmpty(fechaActual) && !string.IsNullOrEmpty(descripcion))
-                    {
-                        movimientos.Add(new MovimientoBanorte
-                        {
-                            Fecha = fechaActual,
-                            Descripcion = descripcion.Trim(),
-                            MontoDeposito = montoDeposito,
-                            MontoRetiro = montoRetiro,
-                            Saldo = saldo,
-                            Anio = selectedYear
-                        });
-                        saldoAnterior = saldo;
-                    }
-
-                    fechaActual = match.Groups["fecha"].Value.Trim();
-                    descripcion = match.Groups["descripcion"].Value.Trim();
-                    montoDeposito = string.Empty;
-                    montoRetiro = string.Empty;
-                    saldo = string.Empty;
-                    isReadingDescription = true;
-
-                    int montoCount = 0;
-                    var partes = descripcion.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                    descripcion = string.Empty; // Reiniciar descripción para reconstruirla sin los montos
-                    foreach (var parte in partes)
-                    {
-                        if (Regex.IsMatch(parte, @"^\d{1,3}(,\d{3})*\.\d{2}$"))
-                        {
-                            montoCount++;
-                            if (montoCount == 1)
-                            {
-                                if (string.IsNullOrEmpty(montoDeposito))
-                                    montoDeposito = parte;
-                                else if (string.IsNullOrEmpty(montoRetiro))
-                                    montoRetiro = parte;
-                            }
-                            else if (montoCount == 2)
-                            {
-                                saldo = parte;
-                                isReadingDescription = false;
-                            }
-                        }
-                        else
-                        {
-                            descripcion += " " + parte;
-                        }
-                    }
-
-                    if (montoCount == 1 && string.IsNullOrEmpty(montoRetiro))
-                    {
-                        saldo = montoDeposito;
-                        montoDeposito = string.Empty;
-                    }
-
-                    if (!string.IsNullOrEmpty(saldoAnterior) && !string.IsNullOrEmpty(saldo))
-                    {
-                        if (decimal.TryParse(saldoAnterior, NumberStyles.AllowThousands | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal saldoAntDec) &&
-                            decimal.TryParse(saldo, NumberStyles.AllowThousands | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out decimal saldoDec))
-                        {
-                            if (saldoDec < saldoAntDec && !string.IsNullOrEmpty(montoDeposito))
-                            {
-                                montoRetiro = montoDeposito;
-                                montoDeposito = string.Empty;
-                            }
-                            else if (saldoDec > saldoAntDec && !string.IsNullOrEmpty(montoDeposito))
-                            {
-                                montoRetiro = string.Empty;
-                            }
-                        }
-                    }
-                }
-                else if (isReadingDescription)
-                {
-                    descripcion += " " + linea.Trim();
-                }
-                else
-                {
-                    descripcion += " " + linea.Trim();
-                }
-            }
-
-            if (!string.IsNullOrEmpty(fechaActual) && !string.IsNullOrEmpty(descripcion))
-            {
-                movimientos.Add(new MovimientoBanorte
-                {
-                    Fecha = fechaActual,
-                    Descripcion = descripcion.Trim(),
-                    MontoDeposito = montoDeposito,
-                    MontoRetiro = montoRetiro,
-                    Saldo = saldo,
-                    Anio = selectedYear
-                });
+                var lineas = contenido.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                ProcesarLineas(lineas, movimientos, anio, ignorePatterns);
             }
 
             return movimientos;
         }
 
+        private void ProcesarLineas(string[] lineas, List<MovimientoBanorte> movimientos, int anio, string[] ignorePatterns)
+        {
+            MovimientoBanorte current = null;
+            decimal saldoAnterior = 0;
+
+            foreach (var linea in lineas)
+            {
+                if (ignorePatterns.Any(p => linea.Contains(p))) continue;
+
+                var matchFecha = Regex.Match(linea, @"^(\d{2}-[A-Z]{3}-\d{2})(.*)");
+                if (matchFecha.Success)
+                {
+                    if (current != null)
+                    {
+                        FinalizarMovimiento(current, saldoAnterior);
+                        movimientos.Add(current);
+                        saldoAnterior = decimal.Parse(current.Saldo, NumberStyles.AllowThousands | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture);
+                    }
+
+                    current = new MovimientoBanorte
+                    {
+                        Fecha = matchFecha.Groups[1].Value.Trim(),
+                        Descripcion = matchFecha.Groups[2].Value.Trim(),
+                        Anio = anio
+                    };
+
+                    ProcesarMontos(current);
+                }
+                else if (current != null)
+                {
+                    current.Descripcion += " " + linea.Trim();
+                    ProcesarMontos(current);
+                }
+            }
+
+            if (current != null)
+            {
+                FinalizarMovimiento(current, saldoAnterior);
+                movimientos.Add(current);
+            }
+        }
+
+        private void ProcesarMontos(MovimientoBanorte movimiento)
+        {
+            var partes = movimiento.Descripcion.Split(' ');
+            movimiento.Descripcion = "";
+            var montos = new List<string>();
+
+            foreach (var parte in partes)
+            {
+                if (Regex.IsMatch(parte, @"^\d{1,3}(,\d{3})*\.\d{2}$"))
+                    montos.Add(parte);
+                else
+                    movimiento.Descripcion += parte + " ";
+            }
+
+            movimiento.Descripcion = movimiento.Descripcion.Trim();
+
+            if (montos.Count > 0)
+            {
+                movimiento.Saldo = montos.Last();
+                if (montos.Count == 2)
+                {
+                    movimiento.MontoDeposito = montos[0];
+                    movimiento.MontoRetiro = "";
+                }
+                else if (montos.Count == 1)
+                {
+                    movimiento.MontoDeposito = "";
+                    movimiento.MontoRetiro = "";
+                }
+            }
+        }
+
+        private void FinalizarMovimiento(MovimientoBanorte movimiento, decimal saldoAnterior)
+        {
+            if (!string.IsNullOrEmpty(movimiento.Saldo))
+            {
+                var saldoActual = decimal.Parse(movimiento.Saldo, NumberStyles.AllowThousands | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture);
+                
+                if (!string.IsNullOrEmpty(movimiento.MontoDeposito))
+                {
+                    var monto = decimal.Parse(movimiento.MontoDeposito, NumberStyles.AllowThousands | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture);
+                    if (saldoActual < saldoAnterior)
+                    {
+                        movimiento.MontoRetiro = movimiento.MontoDeposito;
+                        movimiento.MontoDeposito = "";
+                    }
+                }
+            }
+        }
+    
         // -----------------------------------------------------------------
         // NUEVO: Endpoint general para exportar a Excel para todos los bancos.
         // -----------------------------------------------------------------
@@ -888,7 +934,7 @@ namespace PdfApi.Controllers
         // *****************************************************************
         public class MovimientoBBVA
         {
-            [Required]
+             [Required]
             public string? OPER { get; set; }
             [Required]
             public string? LIQ { get; set; }
@@ -926,7 +972,7 @@ namespace PdfApi.Controllers
 
         public class MovimientoBanorte
         {
-            [Required]
+             [Required]
             public string Fecha { get; set; }
             [Required]
             public string Descripcion { get; set; }
@@ -934,7 +980,8 @@ namespace PdfApi.Controllers
             public string MontoRetiro { get; set; }
             public string Saldo { get; set; }
             [Required]
-            public int Anio { get; set; }
+            public int Anio { get; set; 
         }
     }
-}
+  }
+ }
