@@ -898,18 +898,22 @@ namespace PdfApi.Controllers
                         var worksheet = workbook.Worksheets.Add("Movimientos Banorte");
                         worksheet.Cell(1, 1).Value = "FECHA";
                         worksheet.Cell(1, 2).Value = "DESCRIPCION";
-                        worksheet.Cell(1, 3).Value = "MONTO";
-                        worksheet.Cell(1, 4).Value = "AÑO";
+                        worksheet.Cell(1, 3).Value = "MONTO DEPOSITO";
+                        worksheet.Cell(1, 4).Value = "MONTO RETIRO";
+                        worksheet.Cell(1, 5).Value = "SALDO";
+                        worksheet.Cell(1, 6).Value = "AÑO";
 
                         int row = 2;
                         foreach (var mov in movimientos)
                         {
                             worksheet.Cell(row, 1).Value = mov.Fecha;
                             worksheet.Cell(row, 2).Value = mov.Descripcion;
-                            worksheet.Cell(row, 3).Value = mov.MontoDeposito + (string.IsNullOrEmpty(mov.MontoDeposito) ? "" : " / " + mov.MontoRetiro);
-                            worksheet.Cell(row, 4).Value = mov.Anio;
+                            worksheet.Cell(row, 3).Value = mov.MontoDeposito;
+                            worksheet.Cell(row, 4).Value = mov.MontoRetiro;
+                            worksheet.Cell(row, 5).Value = mov.Saldo; // Si aplica, o agrega si lo necesitas
+                            worksheet.Cell(row, 6).Value = mov.Anio;
                             row++;
-                        }
+                         }
 
                         using (var stream = new MemoryStream())
                         {
@@ -983,5 +987,5 @@ namespace PdfApi.Controllers
             public int Anio { get; set; 
         }
     }
-  }
- }
+    }
+}
