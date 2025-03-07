@@ -694,11 +694,12 @@ namespace PdfApi.Controllers
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public IActionResult ExportToExcel(
-            [FromForm][Required] IFormFile file,
+        [FromForm][Required] IFormFile file,
             [FromForm][Required] int anio,
-            [FromForm][Required] string banco, // Valores: "bbva", "banbajio", "banamex" o "banorte"
-            [FromForm] bool confirmacion = false)
-        {
+            [FromForm][Required] string banco,
+            [FromForm] bool confirmacion = false,
+            [FromForm] bool visualizar = false)
+            {
             if (file.Length == 0)
                 return BadRequest("No se proporcionó un archivo PDF válido.");
 
@@ -722,6 +723,55 @@ namespace PdfApi.Controllers
                             }
                         }
                     }
+
+                    if (visualizar)
+                    {
+                        byte[] excelBytes;
+                        using (var workbook = new XLWorkbook())
+                        {
+                            var worksheet = workbook.Worksheets.Add("Movimientos BBVA");
+                            worksheet.Cell(1, 1).Value = "OPER";
+                            worksheet.Cell(1, 2).Value = "LIQ";
+                            worksheet.Cell(1, 3).Value = "ANIO";
+                            worksheet.Cell(1, 4).Value = "COD_DESCRIPCION";
+                            worksheet.Cell(1, 5).Value = "REFERENCIA";
+                            worksheet.Cell(1, 6).Value = "CARGOS_ABONOS";
+                            worksheet.Cell(1, 7).Value = "OPERACION";
+                            worksheet.Cell(1, 8).Value = "LIQUIDACION";
+
+                            int row = 2;
+                            foreach (var mov in movimientos)
+                            {
+                                worksheet.Cell(row, 1).Value = mov.OPER;
+                                worksheet.Cell(row, 2).Value = mov.LIQ;
+                                worksheet.Cell(row, 3).Value = mov.ANIO;
+                                worksheet.Cell(row, 4).Value = mov.COD_DESCRIPCION;
+                                worksheet.Cell(row, 5).Value = mov.REFERENCIA;
+                                worksheet.Cell(row, 6).Value = mov.CARGOS_ABONOS;
+                                worksheet.Cell(row, 7).Value = mov.OPERACION;
+                                worksheet.Cell(row, 8).Value = mov.LIQUIDACION;
+                                row++;
+                            }
+
+                            using (var stream = new MemoryStream())
+                            {
+                                workbook.SaveAs(stream);
+                                excelBytes = stream.ToArray();
+                            }
+                        }
+
+                        string html = BuildBBVAHtmlTable(movimientos);
+                        html = html.Replace("</body>", 
+                            $"<div style='margin:20px;'><a href='data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{Convert.ToBase64String(excelBytes)}' download='MovimientosBBVA.xlsx' style='padding:10px; background:#007bff; color:white; text-decoration:none; border-radius:5px;'>Descargar Excel</a></div></body>");
+                        
+                        return new ContentResult
+                        {
+                            Content = html,
+                            ContentType = "text/html",
+                            StatusCode = 200
+                        };
+                    }
+
                     using (var workbook = new XLWorkbook())
                     {
                         var worksheet = workbook.Worksheets.Add("Movimientos BBVA");
@@ -774,6 +824,51 @@ namespace PdfApi.Controllers
                             }
                         }
                     }
+
+                    if (visualizar)
+                    {
+                        byte[] excelBytes;
+                        using (var workbook = new XLWorkbook())
+                        {
+                            var worksheet = workbook.Worksheets.Add("Movimientos BanBajio");
+                            worksheet.Cell(1, 1).Value = "FECHA";
+                            worksheet.Cell(1, 2).Value = "AÑO";
+                            worksheet.Cell(1, 3).Value = "REF_DOCT";
+                            worksheet.Cell(1, 4).Value = "DESCRIPCION";
+                            worksheet.Cell(1, 5).Value = "DEPOSITOS/RETIROS";
+                            worksheet.Cell(1, 6).Value = "SALDO";
+
+                            int row = 2;
+                            foreach (var mov in movimientos)
+                            {
+                                worksheet.Cell(row, 1).Value = mov.FECHA;
+                                worksheet.Cell(row, 2).Value = mov.ANIO;
+                                worksheet.Cell(row, 3).Value = mov.REF_DOCT;
+                                worksheet.Cell(row, 4).Value = mov.DESCRIPCION;
+                                worksheet.Cell(row, 5).Value = mov.DEPOSITOS_RETIROS;
+                                worksheet.Cell(row, 6).Value = mov.SALDO;
+                                row++;
+                            }
+
+                            using (var stream = new MemoryStream())
+                            {
+                                workbook.SaveAs(stream);
+                                excelBytes = stream.ToArray();
+                            }
+                        }
+
+                        string html = BuildBanBajioHtmlTable(movimientos);
+                        html = html.Replace("</body>", 
+                            $"<div style='margin:20px;'><a href='data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{Convert.ToBase64String(excelBytes)}' download='MovimientosBanBajio.xlsx' style='padding:10px; background:#007bff; color:white; text-decoration:none; border-radius:5px;'>Descargar Excel</a></div></body>");
+                        
+                        return new ContentResult
+                        {
+                            Content = html,
+                            ContentType = "text/html",
+                            StatusCode = 200
+                        };
+                    }
+
                     using (var workbook = new XLWorkbook())
                     {
                         var worksheet = workbook.Worksheets.Add("Movimientos BanBajio");
@@ -830,48 +925,92 @@ namespace PdfApi.Controllers
                         ProcesarBloques(lines, movimientos, anio);
                     }
 
-                    if (movimientos.Count > 0 && !confirmacion)
+                    if (visualizar)
                     {
-                        var last = movimientos.Last();
-                        return BadRequest(new
+                        byte[] excelBytes;
+                        using (var workbook = new XLWorkbook())
                         {
-                            message = "Verifique el último registro antes de exportar. Envíe confirmacion=true para proceder.",
-                            lastRecord = new
+                            var worksheet = workbook.Worksheets.Add("Movimientos Banamex");
+                            worksheet.Cell(1, 1).Value = "FECHA";
+                            worksheet.Cell(1, 2).Value = "AÑO";
+                            worksheet.Cell(1, 3).Value = "CONCEPTO";
+                            worksheet.Cell(1, 4).Value = "RETIROS/DEPOSITOS";
+                            worksheet.Cell(1, 5).Value = "SALDO";
+
+                            int row = 2;
+                            foreach (var mov in movimientos)
                             {
-                                last.FECHA,
-                                last.ANIO,
-                                last.CONCEPTO,
-                                last.RETIROS_DEPOSITOS,
-                                last.SALDO
+                                worksheet.Cell(row, 1).Value = mov.FECHA;
+                                worksheet.Cell(row, 2).Value = mov.ANIO;
+                                worksheet.Cell(row, 3).Value = mov.CONCEPTO;
+                                worksheet.Cell(row, 4).Value = mov.RETIROS_DEPOSITOS;
+                                worksheet.Cell(row, 5).Value = mov.SALDO;
+                                row++;
                             }
-                        });
-                    }
 
-                    using (var workbook = new XLWorkbook())
-                    {
-                        var worksheet = workbook.Worksheets.Add("Movimientos Banamex");
-                        worksheet.Cell(1, 1).Value = "FECHA";
-                        worksheet.Cell(1, 2).Value = "AÑO";
-                        worksheet.Cell(1, 3).Value = "CONCEPTO";
-                        worksheet.Cell(1, 4).Value = "RETIROS/DEPOSITOS";
-                        worksheet.Cell(1, 5).Value = "SALDO";
-
-                        int row = 2;
-                        foreach (var mov in movimientos)
-                        {
-                            worksheet.Cell(row, 1).Value = mov.FECHA;
-                            worksheet.Cell(row, 2).Value = mov.ANIO;
-                            worksheet.Cell(row, 3).Value = mov.CONCEPTO;
-                            worksheet.Cell(row, 4).Value = mov.RETIROS_DEPOSITOS;
-                            worksheet.Cell(row, 5).Value = mov.SALDO;
-                            row++;
+                            using (var stream = new MemoryStream())
+                            {
+                                workbook.SaveAs(stream);
+                                excelBytes = stream.ToArray();
+                            }
                         }
 
-                        using (var stream = new MemoryStream())
+                        string html = BuildBanamexHtmlTable(movimientos);
+                        html = html.Replace("</body>", 
+                            $"<div style='margin:20px;'><a href='data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{Convert.ToBase64String(excelBytes)}' download='MovimientosBanamex.xlsx' style='padding:10px; background:#007bff; color:white; text-decoration:none; border-radius:5px;'>Descargar Excel</a></div></body>");
+                        
+                        return new ContentResult
                         {
-                            workbook.SaveAs(stream);
-                            var content = stream.ToArray();
-                            return File(content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "MovimientosBanamex.xlsx");
+                            Content = html,
+                            ContentType = "text/html",
+                            StatusCode = 200
+                        };
+                    }
+                    else
+                    {
+                        if (movimientos.Count > 0 && !confirmacion)
+                        {
+                            var last = movimientos.Last();
+                            return BadRequest(new
+                            {
+                                message = "Verifique el último registro antes de exportar. Envíe confirmacion=true para proceder.",
+                                lastRecord = new
+                                {
+                                    last.FECHA,
+                                    last.ANIO,
+                                    last.CONCEPTO,
+                                    last.RETIROS_DEPOSITOS,
+                                    last.SALDO
+                                }
+                            });
+                        }
+
+                        using (var workbook = new XLWorkbook())
+                        {
+                            var worksheet = workbook.Worksheets.Add("Movimientos Banamex");
+                            worksheet.Cell(1, 1).Value = "FECHA";
+                            worksheet.Cell(1, 2).Value = "AÑO";
+                            worksheet.Cell(1, 3).Value = "CONCEPTO";
+                            worksheet.Cell(1, 4).Value = "RETIROS/DEPOSITOS";
+                            worksheet.Cell(1, 5).Value = "SALDO";
+
+                            int row = 2;
+                            foreach (var mov in movimientos)
+                            {
+                                worksheet.Cell(row, 1).Value = mov.FECHA;
+                                worksheet.Cell(row, 2).Value = mov.ANIO;
+                                worksheet.Cell(row, 3).Value = mov.CONCEPTO;
+                                worksheet.Cell(row, 4).Value = mov.RETIROS_DEPOSITOS;
+                                worksheet.Cell(row, 5).Value = mov.SALDO;
+                                row++;
+                            }
+
+                            using (var stream = new MemoryStream())
+                            {
+                                workbook.SaveAs(stream);
+                                var content = stream.ToArray();
+                                return File(content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "MovimientosBanamex.xlsx");
+                            }
                         }
                     }
                 }
@@ -893,6 +1032,51 @@ namespace PdfApi.Controllers
                             }
                         }
                     }
+
+                    if (visualizar)
+                    {
+                        byte[] excelBytes;
+                        using (var workbook = new XLWorkbook())
+                        {
+                            var worksheet = workbook.Worksheets.Add("Movimientos Banorte");
+                            worksheet.Cell(1, 1).Value = "FECHA";
+                            worksheet.Cell(1, 2).Value = "DESCRIPCION";
+                            worksheet.Cell(1, 3).Value = "MONTO DEPOSITO";
+                            worksheet.Cell(1, 4).Value = "MONTO RETIRO";
+                            worksheet.Cell(1, 5).Value = "SALDO";
+                            worksheet.Cell(1, 6).Value = "AÑO";
+
+                            int row = 2;
+                            foreach (var mov in movimientos)
+                            {
+                                worksheet.Cell(row, 1).Value = mov.Fecha;
+                                worksheet.Cell(row, 2).Value = mov.Descripcion;
+                                worksheet.Cell(row, 3).Value = mov.MontoDeposito;
+                                worksheet.Cell(row, 4).Value = mov.MontoRetiro;
+                                worksheet.Cell(row, 5).Value = mov.Saldo;
+                                worksheet.Cell(row, 6).Value = mov.Anio;
+                                row++;
+                            }
+
+                            using (var stream = new MemoryStream())
+                            {
+                                workbook.SaveAs(stream);
+                                excelBytes = stream.ToArray();
+                            }
+                        }
+
+                        string html = BuildBanorteHtmlTable(movimientos);
+                        html = html.Replace("</body>", 
+                            $"<div style='margin:20px;'><a href='data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,{Convert.ToBase64String(excelBytes)}' download='MovimientosBanorte.xlsx' style='padding:10px; background:#007bff; color:white; text-decoration:none; border-radius:5px;'>Descargar Excel</a></div></body>");
+                        
+                        return new ContentResult
+                        {
+                            Content = html,
+                            ContentType = "text/html",
+                            StatusCode = 200
+                        };
+                    }
+
                     using (var workbook = new XLWorkbook())
                     {
                         var worksheet = workbook.Worksheets.Add("Movimientos Banorte");
@@ -910,10 +1094,10 @@ namespace PdfApi.Controllers
                             worksheet.Cell(row, 2).Value = mov.Descripcion;
                             worksheet.Cell(row, 3).Value = mov.MontoDeposito;
                             worksheet.Cell(row, 4).Value = mov.MontoRetiro;
-                            worksheet.Cell(row, 5).Value = mov.Saldo; // Si aplica, o agrega si lo necesitas
+                            worksheet.Cell(row, 5).Value = mov.Saldo;
                             worksheet.Cell(row, 6).Value = mov.Anio;
                             row++;
-                         }
+                        }
 
                         using (var stream = new MemoryStream())
                         {
@@ -933,12 +1117,107 @@ namespace PdfApi.Controllers
                 return StatusCode(500, $"Error al exportar a Excel: {ex.Message}");
             }
         }
-        // *****************************************************************
-        // Modelos
-        // *****************************************************************
+
+        private string BuildBBVAHtmlTable(List<MovimientoBBVA> movimientos)
+        {
+            var sb = new StringBuilder();
+            sb.Append("<!DOCTYPE html><html><head><meta charset='utf-8'><title>Movimientos BBVA</title></head><body>");
+            sb.Append("<h1>Movimientos BBVA</h1>");
+            sb.Append("<table border='1' cellpadding='5' cellspacing='0'>");
+            sb.Append("<tr><th>OPER</th><th>LIQ</th><th>AÑO</th><th>COD_DESCRIPCION</th><th>REFERENCIA</th><th>CARGOS_ABONOS</th><th>OPERACION</th><th>LIQUIDACION</th></tr>");
+
+            foreach (var m in movimientos)
+            {
+                sb.Append("<tr>");
+                sb.Append($"<td>{m.OPER}</td>");
+                sb.Append($"<td>{m.LIQ}</td>");
+                sb.Append($"<td>{m.ANIO}</td>");
+                sb.Append($"<td>{m.COD_DESCRIPCION}</td>");
+                sb.Append($"<td>{m.REFERENCIA}</td>");
+                sb.Append($"<td>{m.CARGOS_ABONOS}</td>");
+                sb.Append($"<td>{m.OPERACION}</td>");
+                sb.Append($"<td>{m.LIQUIDACION}</td>");
+                sb.Append("</tr>");
+            }
+
+            sb.Append("</table></body></html>");
+            return sb.ToString();
+        }
+
+        private string BuildBanBajioHtmlTable(List<MovimientoBanBajio> movimientos)
+        {
+            var sb = new StringBuilder();
+            sb.Append("<!DOCTYPE html><html><head><meta charset='utf-8'><title>Movimientos BanBajío</title></head><body>");
+            sb.Append("<h1>Movimientos BanBajío</h1>");
+            sb.Append("<table border='1' cellpadding='5' cellspacing='0'>");
+            sb.Append("<tr><th>FECHA</th><th>AÑO</th><th>REF_DOCT</th><th>DESCRIPCION</th><th>DEPOSITOS/RETIROS</th><th>SALDO</th></tr>");
+
+            foreach (var m in movimientos)
+            {
+                sb.Append("<tr>");
+                sb.Append($"<td>{m.FECHA}</td>");
+                sb.Append($"<td>{m.ANIO}</td>");
+                sb.Append($"<td>{m.REF_DOCT}</td>");
+                sb.Append($"<td>{m.DESCRIPCION}</td>");
+                sb.Append($"<td>{m.DEPOSITOS_RETIROS}</td>");
+                sb.Append($"<td>{m.SALDO}</td>");
+                sb.Append("</tr>");
+            }
+
+            sb.Append("</table></body></html>");
+            return sb.ToString();
+        }
+
+        private string BuildBanamexHtmlTable(List<MovimientoBanamex> movimientos)
+        {
+            var sb = new StringBuilder();
+            sb.Append("<!DOCTYPE html><html><head><meta charset='utf-8'><title>Movimientos Banamex</title></head><body>");
+            sb.Append("<h1>Movimientos Banamex</h1>");
+            sb.Append("<table border='1' cellpadding='5' cellspacing='0'>");
+            sb.Append("<tr><th>FECHA</th><th>AÑO</th><th>CONCEPTO</th><th>RETIROS/DEPOSITOS</th><th>SALDO</th></tr>");
+
+            foreach (var m in movimientos)
+            {
+                sb.Append("<tr>");
+                sb.Append($"<td>{m.FECHA}</td>");
+                sb.Append($"<td>{m.ANIO}</td>");
+                sb.Append($"<td>{m.CONCEPTO}</td>");
+                sb.Append($"<td>{m.RETIROS_DEPOSITOS}</td>");
+                sb.Append($"<td>{m.SALDO}</td>");
+                sb.Append("</tr>");
+            }
+
+            sb.Append("</table></body></html>");
+            return sb.ToString();
+        }
+
+        private string BuildBanorteHtmlTable(List<MovimientoBanorte> movimientos)
+        {
+            var sb = new StringBuilder();
+            sb.Append("<!DOCTYPE html><html><head><meta charset='utf-8'><title>Movimientos Banorte</title></head><body>");
+            sb.Append("<h1>Movimientos Banorte</h1>");
+            sb.Append("<table border='1' cellpadding='5' cellspacing='0'>");
+            sb.Append("<tr><th>FECHA</th><th>DESCRIPCION</th><th>MONTO DEPOSITO</th><th>MONTO RETIRO</th><th>SALDO</th><th>AÑO</th></tr>");
+
+            foreach (var m in movimientos)
+            {
+                sb.Append("<tr>");
+                sb.Append($"<td>{m.Fecha}</td>");
+                sb.Append($"<td>{m.Descripcion}</td>");
+                sb.Append($"<td>{m.MontoDeposito}</td>");
+                sb.Append($"<td>{m.MontoRetiro}</td>");
+                sb.Append($"<td>{m.Saldo}</td>");
+                sb.Append($"<td>{m.Anio}</td>");
+                sb.Append("</tr>");
+            }
+
+            sb.Append("</table></body></html>");
+            return sb.ToString();
+        }
+
         public class MovimientoBBVA
         {
-             [Required]
+            [Required]
             public string? OPER { get; set; }
             [Required]
             public string? LIQ { get; set; }
@@ -976,7 +1255,7 @@ namespace PdfApi.Controllers
 
         public class MovimientoBanorte
         {
-             [Required]
+            [Required]
             public string Fecha { get; set; }
             [Required]
             public string Descripcion { get; set; }
@@ -984,8 +1263,7 @@ namespace PdfApi.Controllers
             public string MontoRetiro { get; set; }
             public string Saldo { get; set; }
             [Required]
-            public int Anio { get; set; 
+            public int Anio { get; set; }
         }
-    }
-    }
-}
+     }
+ }
