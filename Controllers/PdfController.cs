@@ -16,164 +16,219 @@ namespace PdfApi.Controllers
     [IgnoreAntiforgeryToken]
     public class PdfController : ControllerBase
     {
-        // -----------------------------------------------------------------
-        // Endpoint para procesar PDFs tipo BBVA (Actualizado iText7)
-        // -----------------------------------------------------------------
-        [HttpPost("bbva")]
-        [ProducesResponseType(typeof(List<MovimientoBBVA>), StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public IActionResult ProcesarBBVA(
-            [FromForm][Required] IFormFile file,
-            [FromForm][Required] int anio)
+       // -----------------------------------------------------------------
+    // Endpoint para procesar PDFs tipo BBVA (Actualizado iText7)
+    // -----------------------------------------------------------------
+    [HttpPost("bbva")]
+    [ProducesResponseType(typeof(ResultadoBBVA), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+    public IActionResult ProcesarBBVA(
+        [FromForm][Required] IFormFile file,
+        [FromForm][Required] int anio)
+    {
+        if (file.Length == 0)
+            return BadRequest("No se proporcionó un archivo PDF válido.");
+
+        List<MovimientoBBVA> movimientos = new();
+        Totales totales = new();
+
+        try
         {
-            if (file.Length == 0)
-                return BadRequest("No se proporcionó un archivo PDF válido.");
-
-            List<MovimientoBBVA> movimientos = new();
-
-            try
+            using (var memoryStream = new MemoryStream())
             {
-                using (var memoryStream = new MemoryStream())
+                file.CopyTo(memoryStream);
+                memoryStream.Position = 0;
+
+                using (var reader = new PdfReader(memoryStream))
+                using (var pdfDoc = new PdfDocument(reader))
                 {
-                    file.CopyTo(memoryStream);
-                    memoryStream.Position = 0;
+                    // Aquí podríamos acumular el texto de todas las páginas
+                    StringBuilder textoCompleto = new StringBuilder();
 
-                    using (var reader = new PdfReader(memoryStream))
-                    using (var pdfDoc = new PdfDocument(reader))
+                    for (int page = 1; page <= pdfDoc.GetNumberOfPages(); page++)
                     {
-                        for (int page = 1; page <= pdfDoc.GetNumberOfPages(); page++)
-                        {
-                            var strategy = new SimpleTextExtractionStrategy();
-                            string pageText = PdfTextExtractor.GetTextFromPage(pdfDoc.GetPage(page), strategy);
-                            movimientos.AddRange(ExtraerMovimientosBBVA(pageText, anio));
-                        }
+                        var strategy = new SimpleTextExtractionStrategy();
+                        string pageText = PdfTextExtractor.GetTextFromPage(pdfDoc.GetPage(page), strategy);
+                        movimientos.AddRange(ExtraerMovimientosBBVA(pageText, anio));
+                        textoCompleto.AppendLine(pageText);
                     }
+
+                    // Se extraen los totales a partir del texto acumulado
+                    totales = ExtraerTotalesBBVA(textoCompleto.ToString());
                 }
-                return Ok(movimientos);
             }
-            catch (Exception ex)
+            var resultado = new ResultadoBBVA
             {
-                return StatusCode(500, $"Error al procesar PDF BBVA: {ex.Message}");
-            }
-        }
-
-        private List<MovimientoBBVA> ExtraerMovimientosBBVA(string pagina, int selectedYear)
-        {
-            List<MovimientoBBVA> movimientos = new();
-
-            string[] ignoreLines = {
-                "Estimado Cliente,",
-                "También le informamos que su Contrato ha sido modificado,",
-                "Estado de Cuenta Modificado:",
-                "Su Estado de Cuenta ha sido modificado y ahora tiene más detalle de información.",
-                "Le informamos que su Contrato ha sido modificado, el cual puede consultarlo en cualquier sucursal o en www.bancomer.com",
-                "Con Bancomer, adelante,",
-                "BBVA Bancomer, S.A.",
-                "Institución de Banca Múltiple, Grupo Financiero BBVA Bancomer",
-                "Av. Paseo de la Reforma 510, Col. Juárez, Del. Cuauhtémoc, C.P. 06600, Ciudad de México, México,",
-                "R.F.C. BBA830831LJ2",
-                "el cual puede consultarlo en cualquier sucursal o www.bancomer.com",
-                "Con Bancomer, adelante.",
-                "BBVA BANCOMER, S.A. INSTITUCION DE BANCA MULTIPLE, GRUPO FINANCIERO BBVA BANCOMER",
-                "Total de Movimientos"
+                Movimientos = movimientos,
+                Totales = totales
             };
+            return Ok(resultado);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, $"Error al procesar PDF BBVA: {ex.Message}");
+        }
+    }
 
-            string[] lineas = pagina.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-            MovimientoBBVA? currentMovimiento = null;
-            bool esReferencia = false;
+    private List<MovimientoBBVA> ExtraerMovimientosBBVA(string pagina, int selectedYear)
+    {
+        List<MovimientoBBVA> movimientos = new();
 
-            for (int i = 0; i < lineas.Length; i++)
+        string[] ignoreLines = {
+            "Estimado Cliente,",
+            "También le informamos que su Contrato ha sido modificado,",
+            "Estado de Cuenta Modificado:",
+            "Su Estado de Cuenta ha sido modificado y ahora tiene más detalle de información.",
+            "Le informamos que su Contrato ha sido modificado, el cual puede consultarlo en cualquier sucursal o en www.bancomer.com",
+            "Con Bancomer, adelante,",
+            "BBVA Bancomer, S.A.",
+            "Institución de Banca Múltiple, Grupo Financiero BBVA Bancomer",
+            "Av. Paseo de la Reforma 510, Col. Juárez, Del. Cuauhtémoc, C.P. 06600, Ciudad de México, México,",
+            "R.F.C. BBA830831LJ2",
+            "el cual puede consultarlo en cualquier sucursal o www.bancomer.com",
+            "Con Bancomer, adelante.",
+            "BBVA BANCOMER, S.A. INSTITUCION DE BANCA MULTIPLE, GRUPO FINANCIERO BBVA BANCOMER",
+            "Total de Movimientos"
+        };
+
+        string[] lineas = pagina.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+        MovimientoBBVA? currentMovimiento = null;
+        bool esReferencia = false;
+
+        for (int i = 0; i < lineas.Length; i++)
+        {
+            string linea = lineas[i].Trim();
+            bool isIgnoredLine = ignoreLines.Any(ign => linea.Contains(ign)) || string.IsNullOrWhiteSpace(linea);
+            if (isIgnoredLine) continue;
+
+            var match = Regex.Match(linea, @"^(?<dia1>\d{2})/(?<mes1>[A-Z]{3})\s+(?<dia2>\d{2})/(?<mes2>[A-Z]{3})\s*(?<resto>.*)$");
+            if (match.Success)
             {
-                string linea = lineas[i].Trim();
-                bool isIgnoredLine = ignoreLines.Any(ign => linea.Contains(ign)) || string.IsNullOrWhiteSpace(linea);
-                if (isIgnoredLine) continue;
+                esReferencia = false;
+                string resto = match.Groups["resto"].Value.Trim();
 
-                var match = Regex.Match(linea, @"^(?<dia1>\d{2})/(?<mes1>[A-Z]{3})\s+(?<dia2>\d{2})/(?<mes2>[A-Z]{3})\s*(?<resto>.*)$");
-                if (match.Success)
+                // Extraer montos
+                var montosMatch = Regex.Matches(resto, @"\d{1,3}(,\d{3})*(\.\d{2})");
+                string cargosAbonos = "";
+                string operacion = "";
+                string liquidacion = "";
+
+                if (montosMatch.Count > 0)
                 {
-                    esReferencia = false;
-                    string resto = match.Groups["resto"].Value.Trim();
+                    cargosAbonos = montosMatch[0].Value;
+                    if (montosMatch.Count >= 2) operacion = montosMatch[1].Value;
+                    if (montosMatch.Count >= 3) liquidacion = montosMatch[2].Value;
 
-                    // Extraer montos
-                    var montosMatch = Regex.Matches(resto, @"\d{1,3}(,\d{3})*(\.\d{2})");
-                    string cargosAbonos = "";
-                    string operacion = "";
-                    string liquidacion = "";
-
-                    if (montosMatch.Count > 0)
+                    foreach (Match monto in montosMatch.Cast<Match>())
                     {
-                        cargosAbonos = montosMatch[0].Value;
-                        if (montosMatch.Count >= 2) operacion = montosMatch[1].Value;
-                        if (montosMatch.Count >= 3) liquidacion = montosMatch[2].Value;
-
-                        foreach (Match monto in montosMatch.Cast<Match>())
-                        {
-                            resto = resto.Replace(monto.Value, "").Trim();
-                        }
+                        resto = resto.Replace(monto.Value, "").Trim();
                     }
-
-                    // Procesar referencia
-                    var refMatch = Regex.Match(resto, @"^(?<descripcion>.*?)(Ref\.\s*)(?<referencia>.*)$");
-                    string codDescripcion = resto;
-                    string referencia = "";
-
-                    if (refMatch.Success)
-                    {
-                        codDescripcion = refMatch.Groups["descripcion"].Value.Trim();
-                        referencia = "Ref. " + refMatch.Groups["referencia"].Value.Trim();
-                    }
-
-                    // Crear movimiento
-                    currentMovimiento = new MovimientoBBVA
-                    {
-                        OPER = $"{match.Groups["dia1"].Value}-{match.Groups["mes1"].Value}",
-                        LIQ = $"{match.Groups["dia2"].Value}-{match.Groups["mes2"].Value}",
-                        ANIO = selectedYear,
-                        COD_DESCRIPCION = codDescripcion,
-                        REFERENCIA = referencia,
-                        CARGOS_ABONOS = cargosAbonos,
-                        OPERACION = operacion,
-                        LIQUIDACION = liquidacion
-                    };
-
-                    // Procesar líneas siguientes para descripción
-                    while (i + 1 < lineas.Length)
-                    {
-                        string nextLine = lineas[i + 1].Trim();
-                        if (ignoreLines.Any(ign => nextLine.Contains(ign))) break;
-
-                        bool tieneMontos = Regex.IsMatch(nextLine, @"\d{1,3}(,\d{3})*(\.\d{2})");
-                        bool esNuevoMovimiento = Regex.IsMatch(nextLine, @"^\d{2}/[A-Z]{3}\s+\d{2}/[A-Z]{3}");
-                        
-                        if (tieneMontos || esNuevoMovimiento) break;
-
-                        currentMovimiento.COD_DESCRIPCION += " " + nextLine;
-                        i++;
-                    }
-
-                    movimientos.Add(currentMovimiento);
                 }
-                else if (currentMovimiento != null)
+
+                // Procesar referencia
+                var refMatch = Regex.Match(resto, @"^(?<descripcion>.*?)(Ref\.\s*)(?<referencia>.*)$");
+                string codDescripcion = resto;
+                string referencia = "";
+
+                if (refMatch.Success)
                 {
-                    if (linea.Contains("Ref."))
-                    {
-                        esReferencia = true;
-                        currentMovimiento.REFERENCIA += $" {linea}";
-                    }
-                    else if (esReferencia)
-                    {
-                        currentMovimiento.REFERENCIA += $" {linea}";
-                    }
-                    else
-                    {
-                        currentMovimiento.COD_DESCRIPCION += $" {linea}";
-                    }
+                    codDescripcion = refMatch.Groups["descripcion"].Value.Trim();
+                    referencia = "Ref. " + refMatch.Groups["referencia"].Value.Trim();
+                }
+
+                // Crear movimiento
+                currentMovimiento = new MovimientoBBVA
+                {
+                    OPER = $"{match.Groups["dia1"].Value}-{match.Groups["mes1"].Value}",
+                    LIQ = $"{match.Groups["dia2"].Value}-{match.Groups["mes2"].Value}",
+                    ANIO = selectedYear,
+                    COD_DESCRIPCION = codDescripcion,
+                    REFERENCIA = referencia,
+                    CARGOS_ABONOS = cargosAbonos,
+                    OPERACION = operacion,
+                    LIQUIDACION = liquidacion
+                };
+
+                // Procesar líneas siguientes para descripción
+                while (i + 1 < lineas.Length)
+                {
+                    string nextLine = lineas[i + 1].Trim();
+                    if (ignoreLines.Any(ign => nextLine.Contains(ign))) break;
+
+                    bool tieneMontos = Regex.IsMatch(nextLine, @"\d{1,3}(,\d{3})*(\.\d{2})");
+                    bool esNuevoMovimiento = Regex.IsMatch(nextLine, @"^\d{2}/[A-Z]{3}\s+\d{2}/[A-Z]{3}");
+
+                    if (tieneMontos || esNuevoMovimiento) break;
+
+                    currentMovimiento.COD_DESCRIPCION += " " + nextLine;
+                    i++;
+                }
+
+                movimientos.Add(currentMovimiento);
+            }
+            else if (currentMovimiento != null)
+            {
+                if (linea.Contains("Ref."))
+                {
+                    esReferencia = true;
+                    currentMovimiento.REFERENCIA += $" {linea}";
+                }
+                else if (esReferencia)
+                {
+                    currentMovimiento.REFERENCIA += $" {linea}";
+                }
+                else
+                {
+                    currentMovimiento.COD_DESCRIPCION += $" {linea}";
                 }
             }
-
-            return movimientos;
         }
+
+        return movimientos;
+    }
+
+    /// <summary>
+    /// Método para extraer los totales de depósitos y retiros desde el texto del PDF.
+    /// Se busca el patrón de "Depósitos / Abonos" y "Retiros / Cargos" seguido de un valor numérico.
+    /// </summary>
+    /// <param name="pagina">Texto completo del PDF (o de la página que contenga los totales).</param>
+    /// <returns>Objeto Totales con los valores extraídos.</returns>
+    private Totales ExtraerTotalesBBVA(string pagina)
+    {
+        Totales totales = new Totales();
+
+        // Expresiones regulares para extraer los totales.
+        // Se buscan cadenas como "Depósitos / Abonos (+)     525,000.00"
+        // y "Retiros / Cargos (-)       908,563.18"
+        var depositosRegex = new Regex(@"Dep[oó]sitos\s*/\s*Abonos\s*\(?\+?\)?\s*([\d,]+\.\d{2})", RegexOptions.IgnoreCase);
+        var retirosRegex = new Regex(@"Retiros\s*/\s*Cargos\s*\(?-?\)?\s*([\d,]+\.\d{2})", RegexOptions.IgnoreCase);
+
+        var depositosMatch = depositosRegex.Match(pagina);
+        if (depositosMatch.Success)
+        {
+            string depositosStr = depositosMatch.Groups[1].Value;
+            // Se remueven las comas para poder convertir el valor a decimal
+            if (Decimal.TryParse(depositosStr.Replace(",", ""), out decimal depositos))
+            {
+                totales.Depositos = depositos;
+            }
+        }
+
+        var retirosMatch = retirosRegex.Match(pagina);
+        if (retirosMatch.Success)
+        {
+            string retirosStr = retirosMatch.Groups[1].Value;
+            if (Decimal.TryParse(retirosStr.Replace(",", ""), out decimal retiros))
+            {
+                totales.Retiros = retiros;
+            }
+        }
+
+        return totales;
+    }
+
+
     
 
         // -----------------------------------------------------------------
@@ -1215,6 +1270,18 @@ namespace PdfApi.Controllers
             return sb.ToString();
         }
 
+
+        public class ResultadoBBVA
+        {
+            public List<MovimientoBBVA> Movimientos { get; set; }
+            public Totales Totales { get; set; }
+        }
+
+        public class Totales
+        {
+            public decimal Depositos { get; set; }
+            public decimal Retiros { get; set; }
+        }
         public class MovimientoBBVA
         {
             [Required]
