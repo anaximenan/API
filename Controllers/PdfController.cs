@@ -202,7 +202,7 @@ namespace PdfApi.Controllers
         // Se buscan cadenas como "Depósitos / Abonos (+)     525,000.00"
         // y "Retiros / Cargos (-)       908,563.18"
         var depositosRegex = new Regex(@"Dep[oó]sitos\s*/\s*Abonos\s*\(?\+?\)?\s*([\d,]+\.\d{2})", RegexOptions.IgnoreCase);
-        var retirosRegex = new Regex(@"Retiros\s*/\s*Cargos\s*\(?-?\)?\s*([\d,]+\.\d{2})", RegexOptions.IgnoreCase);
+        var retirosRegex = new Regex(@"Retiros\s*/\s*Cargos\s*(?:\([^)]+\))?\s*([\d,]+\.\d{2})", RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
         var depositosMatch = depositosRegex.Match(pagina);
         if (depositosMatch.Success)
