@@ -16,7 +16,7 @@ namespace PdfApi.Controllers
     [IgnoreAntiforgeryToken]
     public class PdfController : ControllerBase
     {
-       // -----------------------------------------------------------------
+    // -----------------------------------------------------------------
     // Endpoint para procesar PDFs tipo BBVA (Actualizado iText7)
     // -----------------------------------------------------------------
     [HttpPost("bbva")]
@@ -188,45 +188,57 @@ namespace PdfApi.Controllers
         return movimientos;
     }
 
-    /// <summary>
-    /// Método para extraer los totales de depósitos y retiros desde el texto del PDF.
-    /// Se busca el patrón de "Depósitos / Abonos" y "Retiros / Cargos" seguido de un valor numérico.
-    /// </summary>
-    /// <param name="pagina">Texto completo del PDF (o de la página que contenga los totales).</param>
-    /// <returns>Objeto Totales con los valores extraídos.</returns>
-    private Totales ExtraerTotalesBBVA(string pagina)
-    {
-        Totales totales = new Totales();
-
-        // Expresiones regulares para extraer los totales.
-        // Se buscan cadenas como "Depósitos / Abonos (+)     525,000.00"
-        // y "Retiros / Cargos (-)       908,563.18"
-        var depositosRegex = new Regex(@"Dep[oó]sitos\s*/\s*Abonos\s*\(?\+?\)?\s*([\d,]+\.\d{2})", RegexOptions.IgnoreCase);
-        var retirosRegex = new Regex(@"Retiros\s*/\s*Cargos\s*(?:\([^)]+\))?\s*([\d,]+\.\d{2})", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-
-        var depositosMatch = depositosRegex.Match(pagina);
-        if (depositosMatch.Success)
+        /// <summary>
+        /// Método para extraer los totales de depósitos y retiros desde el texto del PDF.
+        /// Se busca el patrón de "Depósitos / Abonos" y "Retiros / Cargos" seguido de un número opcional y luego el monto.
+        /// </summary>
+        /// <param name="pagina">Texto completo del PDF (o de la página que contenga los totales).</param>
+        /// <returns>Objeto Totales con los valores extraídos.</returns>
+        /// <summary>
+        /// Método para extraer los totales de depósitos y retiros desde el texto del PDF.
+        /// Se busca el patrón de "Depósitos / Abonos" y "Retiros / Cargos" seguido de un número opcional y luego el monto.
+        /// </summary>
+        /// <param name="pagina">Texto completo del PDF (o de la página que contenga los totales).</param>
+        /// <returns>Objeto Totales con los valores extraídos.</returns>
+        private Totales ExtraerTotalesBBVA(string pagina)
         {
-            string depositosStr = depositosMatch.Groups[1].Value;
-            // Se remueven las comas para poder convertir el valor a decimal
-            if (Decimal.TryParse(depositosStr.Replace(",", ""), out decimal depositos))
+            Totales totales = new Totales();
+
+            // EXTRAER DEPOSITOS
+            // El patrón busca:
+            // - "Dep[oó]sitos / Abonos" seguido de un posible signo "(+)"
+            // - Opcionalmente, espacios y un número entero (la cantidad de depósitos, que no nos interesa)
+            // - Finalmente, espacios y el monto con formato numérico "1,713,140.96"
+            var depositosRegex = new Regex(@"Dep[oó]sitos\s*/\s*Abonos\s*\(?\+?\)?(?:\s+\d+)?\s+([\d,]+\.\d{2})", RegexOptions.IgnoreCase);
+            var depositosMatch = depositosRegex.Match(pagina);
+            if (depositosMatch.Success)
             {
-                totales.Depositos = depositos;
+                string depositosStr = depositosMatch.Groups[1].Value;
+                if (Decimal.TryParse(depositosStr.Replace(",", ""), out decimal depositos))
+                {
+                    totales.Depositos = depositos;
+                }
             }
+
+            // EXTRAER RETIROS
+            // Se emplea un patrón similar para los retiros que busca:
+            // - "Retiros / Cargos" seguido de un posible signo "(-)"
+            // - Opcionalmente, espacios y un número entero (la cantidad de retiros, que se descarta)
+            // - Finalmente, espacios y el monto con formato "1,049,977.28"
+            var retirosRegex = new Regex(@"Retiros\s*/\s*Cargos\s*\(?-?\)?(?:\s+\d+)?\s+([\d,]+\.\d{2})", RegexOptions.IgnoreCase);
+            var retirosMatch = retirosRegex.Match(pagina);
+            if (retirosMatch.Success)
+            {
+                string retirosStr = retirosMatch.Groups[1].Value;
+                if (Decimal.TryParse(retirosStr.Replace(",", ""), out decimal retiros))
+                {
+                    totales.Retiros = retiros;
+                }
+            }
+
+            return totales;
         }
 
-        var retirosMatch = retirosRegex.Match(pagina);
-        if (retirosMatch.Success)
-        {
-            string retirosStr = retirosMatch.Groups[1].Value;
-            if (Decimal.TryParse(retirosStr.Replace(",", ""), out decimal retiros))
-            {
-                totales.Retiros = retiros;
-            }
-        }
-
-        return totales;
-    }
 
 
     
@@ -241,11 +253,12 @@ namespace PdfApi.Controllers
         public IActionResult ProcesarBanBajio(
             [FromForm][Required] IFormFile file,
             [FromForm][Required] int anio)
-        {
+       {
             if (file.Length == 0)
                 return BadRequest("No se proporcionó un archivo PDF válido.");
 
             List<MovimientoBanBajio> movimientos = new();
+            StringBuilder textoCompleto = new StringBuilder();
 
             try
             {
@@ -262,10 +275,19 @@ namespace PdfApi.Controllers
                             var strategy = new SimpleTextExtractionStrategy();
                             string pageText = PdfTextExtractor.GetTextFromPage(pdfDoc.GetPage(page), strategy);
                             movimientos.AddRange(ExtraerMovimientosBanBajio(pageText, anio));
+                            textoCompleto.AppendLine(pageText);
                         }
                     }
                 }
-                return Ok(movimientos);
+
+                TotalesBanBajio totales = ExtraerTotalesBanBajio(textoCompleto.ToString());
+                var resultado = new ResultadoBanBajio
+                {
+                    Movimientos = movimientos,
+                    Totales = totales
+                };
+
+                return Ok(resultado);
             }
             catch (Exception ex)
             {
@@ -273,41 +295,73 @@ namespace PdfApi.Controllers
             }
         }
 
+        private TotalesBanBajio ExtraerTotalesBanBajio(string texto)
+        {
+            TotalesBanBajio totales = new TotalesBanBajio();
+
+            // Este patrón busca la sección que comienza con "SALDO ANTERIOR" y captura cuatro montos:
+            //  - Grupo1: Saldo Anterior
+            //  - Grupo2: Depósitos
+            //  - Grupo3: Cargos
+            //  - Grupo4: Saldo Actual
+            var totalesRegex = new Regex(
+                @"SALDO\s+ANTERIOR.*?(?:\r?\n)+\s*\$?\s*(\d{1,3}(?:,\d{3})*\.\d{2})\s+\$?\s*(\d{1,3}(?:,\d{3})*\.\d{2})\s+\$?\s*(\d{1,3}(?:,\d{3})*\.\d{2})\s+\$?\s*(\d{1,3}(?:,\d{3})*\.\d{2})",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            
+            var match = totalesRegex.Match(texto);
+            if (match.Success)
+            {
+                // Grupo2: Depósitos, Grupo3: Cargos
+                if (decimal.TryParse(match.Groups[2].Value.Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal depositos) &&
+                    decimal.TryParse(match.Groups[3].Value.Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal cargos))
+                {
+                    totales.Depositos = depositos;
+                    totales.Retiros = cargos;
+                }
+            }
+
+            return totales;
+        }
+
         private List<MovimientoBanBajio> ExtraerMovimientosBanBajio(string pagina, int selectedYear)
         {
             List<MovimientoBanBajio> movimientos = new();
-
-            string[] ignoreLines = {
-                "SALDO ANTERIOR", "SALDO PROMEDIO", "SALDO ACTUAL",
-                "TASA ANUAL", "ISR",
-                "DETALLE DE LA CUENTA", "DESCRIPCION DE LA OPERACION",
-                "FECHA", "NO. REF/DOCT"
-            };
-
-            string[] stopPhrases = {
-                "SALDO TOTAL",
-                "TOTAL DE MOVIMIENTOS EN EL PERIODO"
-            };
-
-            bool stopReading = false;
             string[] lineas = pagina.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
             MovimientoBanBajio? currentMovimiento = null;
 
-            for (int i = 0; i < lineas.Length; i++)
+            // Líneas a ignorar (encabezados, totales, etc.)
+            string[] ignoreLines = {
+                "SALDO ANTERIOR", "SALDO PROMEDIO", "SALDO ACTUAL",
+                "TASA ANUAL", "ISR", "DETALLE DE LA CUENTA",
+                "DESCRIPCION DE LA OPERACION", "FECHA", "NO. REF/DOCT"
+            };
+
+            // Frases que indican el final de los movimientos
+            string[] stopPhrases = { "SALDO TOTAL", "TOTAL DE MOVIMIENTOS" };
+
+            bool stopReading = false;
+
+            foreach (var lineaOriginal in lineas)
             {
-                if (stopReading) break;
+                if (stopReading)
+                    break;
 
-                string linea = lineas[i].Trim();
-                if (string.IsNullOrWhiteSpace(linea)) continue;
+                string linea = lineaOriginal.Trim();
+                if (string.IsNullOrWhiteSpace(linea))
+                    continue;
 
+                // Detener lectura si se encuentra alguna frase de parada
                 if (stopPhrases.Any(sp => linea.Contains(sp, StringComparison.OrdinalIgnoreCase)))
                 {
                     stopReading = true;
                     break;
                 }
-                if (ignoreLines.Any(ign => linea.Contains(ign, StringComparison.OrdinalIgnoreCase))) continue;
 
-                var matchFecha = Regex.Match(linea, @"^(?<dia>\d{1,2})\s+(?<mes>[A-Z]{3})\s+(?<resto>.*)$");
+                if (ignoreLines.Any(ign => linea.Contains(ign, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+
+                // Detectar inicio de un movimiento (ejemplo: "1 ENE 6732858 COMPRA-DISPOSICION...")
+                var matchFecha = Regex.Match(linea, @"^(?<dia>\d{1,2})\s+(?<mes>[A-Z]{3})\s+(?<resto>.*)");
                 if (matchFecha.Success)
                 {
                     currentMovimiento = new MovimientoBanBajio
@@ -321,20 +375,21 @@ namespace PdfApi.Controllers
                     };
 
                     string resto = matchFecha.Groups["resto"].Value;
-                    var montosMatch = Regex.Matches(resto, @"\$?\s?\d{1,3}(?:,\d{3})*(?:\.\d{2})");
+                    // Buscar montos con o sin símbolo de dólar (ej.: "$ 30,000.00")
+                    var montosMatch = Regex.Matches(resto, @"\$?\s*([\d,]+\.\d{2})");
 
                     if (montosMatch.Count >= 1)
                         currentMovimiento.DEPOSITOS_RETIROS = montosMatch[0].Value.Replace("$", "").Trim();
-
                     if (montosMatch.Count >= 2)
                         currentMovimiento.SALDO = montosMatch[1].Value.Replace("$", "").Trim();
 
+                    // Eliminar los montos extraídos para procesar el resto del texto y separar REF_DOCT y DESCRIPCION
                     foreach (Match monto in montosMatch)
                     {
                         resto = resto.Replace(monto.Value, "").Trim();
                     }
 
-                    var refDocMatch = Regex.Match(resto, @"^(?<ref>\S+)\s+(?<desc>.*)$");
+                    var refDocMatch = Regex.Match(resto, @"^(?<ref>\S+)\s+(?<desc>.*)");
                     if (refDocMatch.Success)
                     {
                         currentMovimiento.REF_DOCT = refDocMatch.Groups["ref"].Value;
@@ -349,11 +404,13 @@ namespace PdfApi.Controllers
                 }
                 else if (currentMovimiento != null)
                 {
+                    // Continuar agregando texto a la descripción en caso de movimiento multilínea
                     currentMovimiento.DESCRIPCION += $" {linea}";
                 }
             }
+
             return movimientos;
-        }
+    }
 
         // -----------------------------------------------------------------
         // Endpoint para procesar PDFs tipo Banamex (Actualizado iText7)
@@ -370,6 +427,8 @@ namespace PdfApi.Controllers
                 return BadRequest("No se proporcionó un archivo PDF válido.");
 
             List<MovimientoBanamex> movimientos = new();
+            StringBuilder textoCompleto = new StringBuilder();
+            string transaccionPendiente = string.Empty;
 
             try
             {
@@ -377,8 +436,6 @@ namespace PdfApi.Controllers
                 {
                     file.CopyTo(memoryStream);
                     memoryStream.Position = 0;
-                    string transaccionPendiente = string.Empty;
-
                     using (var reader = new PdfReader(memoryStream))
                     using (var pdfDoc = new PdfDocument(reader))
                     {
@@ -386,30 +443,40 @@ namespace PdfApi.Controllers
                         {
                             var strategy = new SimpleTextExtractionStrategy();
                             string pageText = PdfTextExtractor.GetTextFromPage(pdfDoc.GetPage(page), strategy);
-                            // Aquí se puede registrar pageText en un log para análisis, si se desea.
+                            // Normalizamos alguna notación de fechas si es necesario.
                             pageText = ProcessTextBanamex(pageText);
                             transaccionPendiente = ExtractMovementsFromPageBanamex(pageText, movimientos, anio, transaccionPendiente);
+                            textoCompleto.AppendLine(pageText);
                         }
                     }
-
-                    if (!string.IsNullOrEmpty(transaccionPendiente))
-                    {
-                        // Separamos las líneas del bloque pendiente y las procesamos
-                        var lines = transaccionPendiente.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries).ToList();
-                        ProcesarBloques(lines, movimientos, anio);
-                    }
                 }
-                return Ok(movimientos);
+
+                // Si queda bloque pendiente, procesarlo
+                if (!string.IsNullOrEmpty(transaccionPendiente))
+                {
+                    var lines = transaccionPendiente.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries).ToList();
+                    ProcesarBloques(lines, movimientos, anio);
+                }
+
+                // Extraemos los totales del texto completo
+                TotalesBanamex totales = ExtraerTotalesBanamex(textoCompleto.ToString());
+                var resultado = new ResultadoBanamex
+                {
+                    Movimientos = movimientos,
+                    Totales = totales
+                };
+                return Ok(resultado);
             }
-            catch (Exception ex)
+            catch (System.Exception ex)
             {
                 return StatusCode(500, $"Error al procesar PDF Banamex: {ex.Message}");
             }
         }
 
+        // Método para normalizar texto (por ejemplo, ajustar formato de fechas)
         private string ProcessTextBanamex(string text)
         {
-            // Normaliza las fechas del formato "dd-MES" a "dd MES"
+            // Ejemplo: transformar "dd-MES" a "dd MES"
             return Regex.Replace(text, @"(\d{1,2})-([A-Z]{3})", "$1 $2", RegexOptions.IgnoreCase);
         }
 
@@ -427,7 +494,7 @@ namespace PdfApi.Controllers
 
                 if (lineaMayus.Contains("DETALLE DE OPERACIONES"))
                     enDetalle = true;
-                if (enDetalle && DebeTerminarSeccion(lineaMayus))
+                if (enDetalle && DebeTerminarSeccionBanamex(lineaMayus))
                     enDetalle = false;
 
                 if (!enDetalle)
@@ -440,7 +507,7 @@ namespace PdfApi.Controllers
                 if (lineaMayus.Contains("CIFIBANAMEX"))
                     continue;
 
-                if (Regex.IsMatch(linea, @"^\d{1,2}[\s-]+(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\b", RegexOptions.IgnoreCase))
+                if (Regex.IsMatch(linea, @"^\d{1,2}\s+(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)\b", RegexOptions.IgnoreCase))
                 {
                     if (!string.IsNullOrEmpty(bloqueActual))
                         bloques.Add(bloqueActual);
@@ -456,56 +523,39 @@ namespace PdfApi.Controllers
             return bloqueActual;
         }
 
-        private bool DebeTerminarSeccion(string linea)
+        private bool DebeTerminarSeccionBanamex(string linea)
         {
             return linea.Contains("COMISIONES COBRADAS") ||
-                linea.Contains("RESUMEN") ||
-                linea.Contains("ESTADO DE CUENTA") ||
-                linea.Contains("CLIENTE:") ||
-                linea.Contains("SUBTOTALES") ||
-                linea.Contains("SALDO MINIMO REQUERIDO");
+                   linea.Contains("RESUMEN") ||
+                   linea.Contains("ESTADO DE CUENTA") ||
+                   linea.Contains("CLIENTE:") ||
+                   linea.Contains("SUBTOTALES") ||
+                   linea.Contains("SALDO MINIMO REQUERIDO");
         }
 
         private void ProcesarBloques(List<string> bloques, List<MovimientoBanamex> movimientos, int anio)
         {
             foreach (string bloque in bloques)
             {
-                // Se extrae la fecha y el resto del bloque; se asume que comienza con "dd MES"
                 var match = Regex.Match(bloque, @"^(?<dia>\d{1,2})\s+(?<mes>[A-Z]{3})\s+(?<resto>.*)$", RegexOptions.IgnoreCase);
                 if (!match.Success) continue;
 
                 string dia = match.Groups["dia"].Value;
                 string mes = match.Groups["mes"].Value;
                 string resto = match.Groups["resto"].Value;
-
                 string deposit = "";
                 string saldo = "";
                 string concepto = "";
 
-                // Si el bloque contiene "IMPORTE:" (con signo $)
-                if (resto.IndexOf("IMPORTE:", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (resto.IndexOf("IMPORTE:", System.StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    int idx = resto.IndexOf("IMPORTE:", StringComparison.OrdinalIgnoreCase);
-                    // Todo lo anterior a "IMPORTE:" es parte del concepto
+                    int idx = resto.IndexOf("IMPORTE:", System.StringComparison.OrdinalIgnoreCase);
                     string conceptPart = resto.Substring(0, idx).Trim();
                     string amountPart = resto.Substring(idx);
-                    // Eliminar "IMPORTE:" y el signo $ de la parte de montos
                     amountPart = Regex.Replace(amountPart, @"IMPORTE:\s*\$?\s*", "", RegexOptions.IgnoreCase);
-                    // Se extraen los montos sin el signo $, usando lookbehind negativo
-                    var amountsAfter = Regex.Matches(amountPart, @"(?<!\$)\b\d{1,3}(?:,\d{3})*\.\d{2}\b");
+                    var amountsAfter = Regex.Matches(amountPart, @"\b\d{1,3}(?:,\d{3})*\.\d{2}\b");
                     List<string> newAmounts = amountsAfter.Cast<Match>().Select(m => m.Value).ToList();
-
-                    if (newAmounts.Count == 0)
-                    {
-                        deposit = "";
-                        saldo = "";
-                    }
-                    else if (newAmounts.Count == 1)
-                    {
-                        deposit = newAmounts[0];
-                        saldo = "";
-                    }
-                    else
+                    if (newAmounts.Count >= 2)
                     {
                         deposit = newAmounts[0];
                         saldo = newAmounts[1];
@@ -514,37 +564,24 @@ namespace PdfApi.Controllers
                 }
                 else
                 {
-                    // Fallback: extraer todos los montos (ignorando aquellos cercanos a "REF", "RFB" o "DIVISA")
                     var allMontos = Regex.Matches(resto, @"\b\d{1,3}(?:,\d{3})*\.\d{2}\b");
                     List<string> listaMontos = allMontos.Cast<Match>().Select(m => m.Value).ToList();
                     List<string> filteredMontos = new();
                     foreach (string mo in listaMontos)
                     {
                         int index = resto.IndexOf(mo);
-                        int start = Math.Max(0, index - 15);
-                        int length = Math.Min(30, resto.Length - start);
+                        int start = System.Math.Max(0, index - 15);
+                        int length = System.Math.Min(30, resto.Length - start);
                         string snippet = resto.Substring(start, length).ToUpper();
                         if (snippet.Contains("REF") || snippet.Contains("RFB") || snippet.Contains("DIVISA"))
                             continue;
                         filteredMontos.Add(mo);
                     }
-
-                    if (filteredMontos.Count == 0)
-                    {
-                        deposit = "";
-                        saldo = "";
-                    }
-                    else if (filteredMontos.Count == 1)
-                    {
-                        deposit = filteredMontos[0];
-                        saldo = "";
-                    }
-                    else
+                    if (filteredMontos.Count >= 2)
                     {
                         deposit = filteredMontos[0];
                         saldo = filteredMontos[1];
                     }
-                    // Se eliminan los montos extraídos para limpiar el concepto
                     foreach (string mVal in filteredMontos)
                     {
                         resto = resto.Replace(mVal, "").Trim();
@@ -565,6 +602,38 @@ namespace PdfApi.Controllers
             }
         }
 
+        // NUEVO método: Extraer Totales para Banamex a partir del bloque "RESUMEN POR MEDIOS DE ACCESO RETIROS DEPOSITOS"
+        private TotalesBanamex ExtraerTotalesBanamex(string texto)
+        {
+            TotalesBanamex totales = new TotalesBanamex();
+
+            // Se asume que en el bloque aparece una línea que contiene
+            // "RESUMEN POR MEDIOS DE ACCESO RETIROS DEPOSITOS" y, en una línea siguiente,
+            // se encuentra el detalle, por ejemplo:
+            // "Cheques  7004 2244722 $1,715,505.23 $1,671,781.60"
+            //
+            // El siguiente patrón busca esa cadena y captura los dos montos:
+            var regex = new Regex(
+                @"RESUMEN\s+POR\s+MEDIOS\s+DE\s+ACCESO\s+RETIROS\s+DEPOSITOS.*?\$?\s*(\d{1,3}(?:,\d{3})*\.\d{2}).*?\$?\s*(\d{1,3}(?:,\d{3})*\.\d{2})",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            var match = regex.Match(texto);
+            if (match.Success)
+            {
+                if (decimal.TryParse(match.Groups[1].Value.Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal retiros))
+                {
+                    totales.RETIROS = retiros;
+                }
+                if (decimal.TryParse(match.Groups[2].Value.Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal depositos))
+                {
+                    totales.DEPOSITOS = depositos;
+                }
+            }
+            return totales;
+         }
+        
+
+
+
 
         // -----------------------------------------------------------------
         // Endpoint para procesar PDFs tipo Banorte
@@ -582,11 +651,24 @@ namespace PdfApi.Controllers
 
             try
             {
+                // Extraer todo el texto del PDF
                 var text = ExtraerTextoPdf(file);
+
+                // Extraer los movimientos (manteniendo la lógica existente)
                 var movimientos = ExtraerMovimientosBanorte(text, anio);
-                return Ok(movimientos);
+
+                // Extraer el resumen de totales (depósitos y retiros) a partir del texto completo
+                TotalesBanorte totales = ExtraerTotalesBanorte(text);
+
+                var resultado = new ResultadoBanorte
+                {
+                    Movimientos = movimientos,
+                    Totales = totales
+                };
+
+                return Ok(resultado);
             }
-            catch (Exception ex)
+            catch (System.Exception ex)
             {
                 return StatusCode(500, $"Error al procesar PDF Banorte: {ex.Message}");
             }
@@ -610,15 +692,14 @@ namespace PdfApi.Controllers
 
         private string ProcesarTexto(string text)
         {
+            // Limpia el texto de múltiples espacios y normaliza líneas
             var processedText = new StringBuilder();
             var lines = text.Split('\n');
             foreach (var line in lines)
             {
                 string cleanedLine = Regex.Replace(line.Trim(), @"\s{2,}", " ");
-                if (Regex.IsMatch(cleanedLine, @"^\d{2}-[A-Z]{3}-\d{2}"))
-                    processedText.AppendLine("\n" + cleanedLine);
-                else
-                    processedText.AppendLine(cleanedLine);
+                // Puedes agregar más transformaciones si es necesario
+                processedText.AppendLine(cleanedLine);
             }
             return processedText.ToString();
         }
@@ -626,39 +707,37 @@ namespace PdfApi.Controllers
         private List<MovimientoBanorte> ExtraerMovimientosBanorte(string text, int anio)
         {
             var movimientos = new List<MovimientoBanorte>();
-            var ignorePatterns = new[]
-            {
-                "Línea Directa para su empresa:",
-                "Visita nuestra página:",
-                "Banco Mercantil del Norte S.A.",
-                "Institución de Banca Múltiple Grupo Financiero Banorte",
-                "ESTADO DE CUENTA / ENLACE NEGOCIOS PFAE"
-            };
 
+            // Aquí se mantiene la lógica previa para extraer movimientos.
+            // Se utiliza "DETALLE DE MOVIMIENTOS (PESOS)" para segmentar el bloque de movimientos.
             string[] bloques = text.Split(new[] { "DETALLE DE MOVIMIENTOS (PESOS)" }, StringSplitOptions.None);
-            
             foreach (var bloque in bloques.Skip(1))
             {
                 int indexFin = bloque.IndexOf("OTROS");
                 string contenido = indexFin != -1 ? bloque.Substring(0, indexFin) : bloque;
 
                 var lineas = contenido.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                ProcesarLineas(lineas, movimientos, anio, ignorePatterns);
+                ProcesarLineas(lineas, movimientos, anio);
             }
-
             return movimientos;
         }
 
-        private void ProcesarLineas(string[] lineas, List<MovimientoBanorte> movimientos, int anio, string[] ignorePatterns)
+        private void ProcesarLineas(string[] lineas, List<MovimientoBanorte> movimientos, int anio)
         {
             MovimientoBanorte current = null;
             decimal saldoAnterior = 0;
 
             foreach (var linea in lineas)
             {
-                if (ignorePatterns.Any(p => linea.Contains(p))) continue;
+                string trimmed = linea.Trim();
+                // Ignorar líneas de encabezado o pie
+                if (trimmed.StartsWith("Línea Directa") ||
+                    trimmed.Contains("Banco Mercantil del Norte") ||
+                    trimmed.Contains("ESTADO DE CUENTA / ENLACE NEGOCIOS PFAE"))
+                    continue;
 
-                var matchFecha = Regex.Match(linea, @"^(\d{2}-[A-Z]{3}-\d{2})(.*)");
+                // Asumir que cada movimiento comienza con un formato de fecha "dd-MES-yy"
+                var matchFecha = Regex.Match(trimmed, @"^(\d{2}-[A-Z]{3}-\d{2})(.*)");
                 if (matchFecha.Success)
                 {
                     if (current != null)
@@ -667,23 +746,20 @@ namespace PdfApi.Controllers
                         movimientos.Add(current);
                         saldoAnterior = decimal.Parse(current.Saldo, NumberStyles.AllowThousands | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture);
                     }
-
                     current = new MovimientoBanorte
                     {
                         Fecha = matchFecha.Groups[1].Value.Trim(),
                         Descripcion = matchFecha.Groups[2].Value.Trim(),
                         Anio = anio
                     };
-
                     ProcesarMontos(current);
                 }
                 else if (current != null)
                 {
-                    current.Descripcion += " " + linea.Trim();
+                    current.Descripcion += " " + trimmed;
                     ProcesarMontos(current);
                 }
             }
-
             if (current != null)
             {
                 FinalizarMovimiento(current, saldoAnterior);
@@ -704,9 +780,7 @@ namespace PdfApi.Controllers
                 else
                     movimiento.Descripcion += parte + " ";
             }
-
             movimiento.Descripcion = movimiento.Descripcion.Trim();
-
             if (montos.Count > 0)
             {
                 movimiento.Saldo = montos.Last();
@@ -715,10 +789,11 @@ namespace PdfApi.Controllers
                     movimiento.MontoDeposito = montos[0];
                     movimiento.MontoRetiro = "";
                 }
-                else if (montos.Count == 1)
+                else if (montos.Count > 2)
                 {
-                    movimiento.MontoDeposito = "";
-                    movimiento.MontoRetiro = "";
+                    // Dependiendo del formato puede ajustarse
+                    movimiento.MontoDeposito = montos[0];
+                    movimiento.MontoRetiro = montos[1];
                 }
             }
         }
@@ -728,7 +803,6 @@ namespace PdfApi.Controllers
             if (!string.IsNullOrEmpty(movimiento.Saldo))
             {
                 var saldoActual = decimal.Parse(movimiento.Saldo, NumberStyles.AllowThousands | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture);
-                
                 if (!string.IsNullOrEmpty(movimiento.MontoDeposito))
                 {
                     var monto = decimal.Parse(movimiento.MontoDeposito, NumberStyles.AllowThousands | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture);
@@ -739,6 +813,34 @@ namespace PdfApi.Controllers
                     }
                 }
             }
+        }
+
+        // Nuevo método para extraer totales de Banorte
+        // Se busca en el texto completo la línea que contiene "+ Total de depósitos" y "- Total de retiros"
+        // y se extraen los dos montos correspondientes.
+        private TotalesBanorte ExtraerTotalesBanorte(string text)
+        {
+            TotalesBanorte totales = new TotalesBanorte();
+
+            // Buscar el monto de depósitos. Se asume que la línea comienza con el signo +
+            var regexDepositos = new Regex(@"\+\s*Total\s+de\s+dep[oó]sitos\s*\$?\s*(\d{1,3}(?:,\d{3})*\.\d{2})", RegexOptions.IgnoreCase);
+            var matchDep = regexDepositos.Match(text);
+            if (matchDep.Success &&
+                decimal.TryParse(matchDep.Groups[1].Value.Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal depositos))
+            {
+                totales.Depositos = depositos;
+            }
+
+            // Buscar el monto de retiros. Se asume que la línea comienza con el signo -
+            var regexRetiros = new Regex(@"-\s*Total\s+de\s+retiros\s*\$?\s*(\d{1,3}(?:,\d{3})*\.\d{2})", RegexOptions.IgnoreCase);
+            var matchRet = regexRetiros.Match(text);
+            if (matchRet.Success &&
+                decimal.TryParse(matchRet.Groups[1].Value.Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out decimal retiros))
+            {
+                totales.Retiros = retiros;
+            }
+
+            return totales;
         }
     
         // -----------------------------------------------------------------
@@ -1309,6 +1411,18 @@ namespace PdfApi.Controllers
             public string? SALDO { get; set; }
         }
 
+        public class TotalesBanBajio
+        {
+            public decimal Depositos { get; set; }
+            public decimal Retiros { get; set; }
+        }
+
+        public class ResultadoBanBajio
+        {
+            public List<MovimientoBanBajio> Movimientos { get; set; }
+            public TotalesBanBajio Totales { get; set; }
+        }
+
         public class MovimientoBanamex
         {
             [Required]
@@ -1318,6 +1432,21 @@ namespace PdfApi.Controllers
             public string? CONCEPTO { get; set; }
             public string? RETIROS_DEPOSITOS { get; set; }
             public string? SALDO { get; set; }
+        }
+
+         public class TotalesBanamex
+        {
+            // Según lo solicitado:
+            // RETIROS: primer monto del bloque de totales
+            // DEPOSITOS: segundo monto del bloque
+            public decimal RETIROS { get; set; }
+            public decimal DEPOSITOS { get; set; }
+        }
+
+        public class ResultadoBanamex
+        {
+            public List<MovimientoBanamex> Movimientos { get; set; }
+            public TotalesBanamex Totales { get; set; }
         }
 
         public class MovimientoBanorte
@@ -1332,5 +1461,18 @@ namespace PdfApi.Controllers
             [Required]
             public int Anio { get; set; }
         }
+
+        public class TotalesBanorte
+        {
+            public decimal Depositos { get; set; }
+            public decimal Retiros { get; set; }
+        }
+
+        public class ResultadoBanorte
+        {
+            public List<MovimientoBanorte> Movimientos { get; set; }
+            public TotalesBanorte Totales { get; set; }
+        }
+
      }
  }
